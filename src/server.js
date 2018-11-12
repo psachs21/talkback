@@ -20,7 +20,9 @@ export default class TalkbackServer {
       try {
         reqBody = Buffer.concat(reqBody)
         req.body = reqBody
-        const requestHandler = new RequestHandler(this.tapeStore, this.options)
+        
+        const mode = req.headers["x-talkback-mode"] // either record|playback. Might actually be a server side setting instead of a reuqest based setting
+        const requestHandler = new RequestHandler(this.tapeStore, this.options, mode)
         const fRes = await requestHandler.handle(req)
 
         res.writeHead(fRes.status, fRes.headers)

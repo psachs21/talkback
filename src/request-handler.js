@@ -3,14 +3,18 @@ const fetch = require("node-fetch")
 import Tape from "./tape"
 
 export default class RequestHandler {
-  constructor(tapeStore, options) {
+  constructor(tapeStore, options, mode) {
     this.tapeStore = tapeStore
     this.options = options
+    this.mode = mode
   }
 
   async handle(req) {
     const reqTape = new Tape(req, this.options)
-    let resTape = this.tapeStore.find(reqTape)
+    reqTape.recordGroup = req.headers["x-talkback-record-group"];
+  
+    // if we're in playback mode or default mode, we need to find the tape
+    let resTape = (this.mode === 'playback' || !this.mode) && this.tapeStore.find(reqTape, this.mode)
     let resObj
 
     if (resTape) {
@@ -26,7 +30,9 @@ export default class RequestHandler {
       if (this.options.record) {
         resObj = await this.makeRealRequest(req)
         reqTape.res = {...resObj}
-        this.tapeStore.save(reqTape)
+        if (this.mode !== 'playback') {
+          this.tapeStore.save(reqTape)
+        }
       } else {
         resObj = await this.onNoRecord(req)
       }

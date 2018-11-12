@@ -13,7 +13,8 @@ export default class Tape {
       body: req.body
     }
     this.options = options
-    this.headersToIgnore = ["host"].concat(this.options.ignoreHeaders)
+    this.headersToIgnore = ["host", "x-talkback-record-group", "x-talkback-mode"].concat(this.options.ignoreHeaders)
+  
     this.cleanupHeaders()
 
     this.queryParamsToIgnore = this.options.ignoreQueryParams

@@ -72,7 +72,7 @@ function () {
       body: req.body
     };
     this.options = options;
-    this.headersToIgnore = ["host"].concat(this.options.ignoreHeaders);
+    this.headersToIgnore = ["host", "x-talkback-record-group", "x-talkback-mode"].concat(this.options.ignoreHeaders);
     this.cleanupHeaders();
     this.queryParamsToIgnore = this.options.ignoreQueryParams;
     this.cleanupQueryParams();
@@ -192,11 +192,12 @@ var fetch = require("node-fetch");
 var RequestHandler =
 /*#__PURE__*/
 function () {
-  function RequestHandler(tapeStore, options) {
+  function RequestHandler(tapeStore, options, mode) {
     _classCallCheck(this, RequestHandler);
 
     this.tapeStore = tapeStore;
     this.options = options;
+    this.mode = mode;
   }
 
   _createClass(RequestHandler, [{
@@ -211,10 +212,12 @@ function () {
             switch (_context.prev = _context.next) {
               case 0:
                 reqTape = new Tape(req, this.options);
-                resTape = this.tapeStore.find(reqTape);
+                reqTape.recordGroup = req.headers["x-talkback-record-group"]; // if we're in playback mode or default mode, we need to find the tape
+
+                resTape = (this.mode === 'playback' || !this.mode) && this.tapeStore.find(reqTape, this.mode);
 
                 if (!resTape) {
-                  _context.next = 7;
+                  _context.next = 8;
                   break;
                 }
 
@@ -227,36 +230,40 @@ function () {
                 }
 
                 resObj = resTape.res;
-                _context.next = 18;
+                _context.next = 19;
                 break;
 
-              case 7:
+              case 8:
                 if (!this.options.record) {
-                  _context.next = 15;
+                  _context.next = 16;
                   break;
                 }
 
-                _context.next = 10;
+                _context.next = 11;
                 return this.makeRealRequest(req);
 
-              case 10:
+              case 11:
                 resObj = _context.sent;
                 reqTape.res = _objectSpread({}, resObj);
-                this.tapeStore.save(reqTape);
-                _context.next = 18;
+
+                if (this.mode !== 'playback') {
+                  this.tapeStore.save(reqTape);
+                }
+
+                _context.next = 19;
                 break;
 
-              case 15:
-                _context.next = 17;
+              case 16:
+                _context.next = 18;
                 return this.onNoRecord(req);
 
-              case 17:
+              case 18:
                 resObj = _context.sent;
 
-              case 18:
+              case 19:
                 return _context.abrupt("return", resObj);
 
-              case 19:
+              case 20:
               case "end":
                 return _context.stop();
             }
@@ -430,6 +437,12 @@ function () {
       var otherReq = otherTape.req;
       var req = this.tape.req;
       var sameURL = req.url === otherReq.url;
+      var sameRecordGroup = this.tape.recordGroup === otherTape.recordGroup;
+
+      if (!sameRecordGroup) {
+        this.options.logger.debug("Not same group ".concat(this.tape.recordGroup, " vs ").concat(otherTape.recordGroup));
+        return false;
+      }
 
       if (!sameURL) {
         if (!this.options.urlMatcher) {
@@ -515,46 +528,84 @@ function () {
     this.path = path.normalize(options.path + "/");
     this.options = options;
     this.tapes = [];
+    this.groupOrder = {};
   }
 
   _createClass(TapeStore, [{
     key: "load",
     value: function load() {
+      var _this = this;
+
       mkdirp.sync(this.path);
-      var items = fs.readdirSync(this.path);
 
-      for (var i = 0; i < items.length; i++) {
-        var filename = items[i];
-        var fullPath = "".concat(this.path).concat(filename);
-        var stat = fs.statSync(fullPath);
+      var readFilesTo = function readFilesTo(p, recordGroup) {
+        var items = fs.readdirSync(p);
 
-        if (!stat.isDirectory()) {
-          try {
-            var data = fs.readFileSync(fullPath, "utf8");
-            var raw = JSON5.parse(data);
-            var tape = Tape.fromStore(raw, this.options);
-            tape.path = filename;
-            this.tapes.push(tape);
-          } catch (e) {
-            console.log("Error reading tape ".concat(fullPath), e.message);
+        for (var i = 0; i < items.length; i++) {
+          var filename = items[i];
+          var fullPath = path.join(p, filename);
+          var stat = fs.statSync(fullPath);
+
+          if (!stat.isDirectory()) {
+            try {
+              var data = fs.readFileSync(fullPath, "utf8");
+              var raw = JSON5.parse(data);
+              var tape = Tape.fromStore(raw, _this.options);
+              tape.recordGroup = recordGroup || '';
+              tape.path = path.join(recordGroup || '', filename);
+
+              if (recordGroup) {
+                tape.recordGroup = recordGroup;
+              }
+
+              _this.tapes.push(tape);
+            } catch (e) {
+              console.log("Error reading tape ".concat(fullPath), e.message);
+            }
+          } else {
+            readFilesTo(fullPath, filename);
           }
         }
-      }
+      };
 
+      readFilesTo(this.path);
       console.log("Loaded ".concat(this.tapes.length, " tapes"));
     }
   }, {
     key: "find",
-    value: function find(newTape) {
-      var _this = this;
+    value: function find(newTape, mode) {
+      var _this2 = this;
 
+      var foundCount = 0;
       var foundTape = this.tapes.find(function (t) {
-        _this.options.logger.debug("Comparing against tape ".concat(t.path));
+        _this2.options.logger.debug("Comparing against tape ".concat(t.path));
 
-        return new TapeMatcher(t, _this.options).sameAs(newTape);
+        var isSame = new TapeMatcher(t, _this2.options).sameAs(newTape);
+
+        if (mode === undefined) {
+          return isSame;
+        }
+
+        if (isSame) {
+          if (foundCount === (_this2.groupOrder[t.recordGroup] || 0)) {
+            return true;
+          } else {
+            foundCount++;
+          }
+        }
+
+        return false;
       });
 
       if (foundTape) {
+        if (foundTape.recordGroup) {
+          if (this.groupOrder[foundTape.recordGroup] === undefined) {
+            this.groupOrder[foundTape.recordGroup] = 1;
+          } else {
+            this.groupOrder[foundTape.recordGroup]++;
+          }
+        }
+
         foundTape.used = true;
         this.options.logger.log("Serving cached request for ".concat(newTape.req.url, " from tape ").concat(foundTape.path));
         return foundTape;
@@ -569,8 +620,13 @@ function () {
       var toSave = tape.toRaw();
       var tapeName = "unnamed-".concat(this.tapes.length, ".json5");
       tape.path = tapeName;
-      var filename = this.path + tapeName;
+      var filename = path.join(this.path, tape.recordGroup || '', tapeName);
       this.options.logger.log("Saving request ".concat(tape.req.url, " at ").concat(filename));
+
+      if (tape.recordGroup) {
+        mkdirp.sync(path.join(this.path, tape.recordGroup || ''));
+      }
+
       fs.writeFileSync(filename, JSON5.stringify(toSave, null, 4));
     }
   }, {
@@ -621,7 +677,7 @@ function () {
       _asyncToGenerator(
       /*#__PURE__*/
       _regeneratorRuntime.mark(function _callee() {
-        var requestHandler, fRes;
+        var mode, requestHandler, fRes;
         return _regeneratorRuntime.wrap(function _callee$(_context) {
           while (1) {
             switch (_context.prev = _context.next) {
@@ -629,30 +685,32 @@ function () {
                 _context.prev = 0;
                 reqBody = Buffer.concat(reqBody);
                 req.body = reqBody;
-                requestHandler = new RequestHandler(_this.tapeStore, _this.options);
-                _context.next = 6;
+                mode = req.headers["x-talkback-mode"]; // either record|playback. Might actually be a server side setting instead of a reuqest based setting
+
+                requestHandler = new RequestHandler(_this.tapeStore, _this.options, mode);
+                _context.next = 7;
                 return requestHandler.handle(req);
 
-              case 6:
+              case 7:
                 fRes = _context.sent;
                 res.writeHead(fRes.status, fRes.headers);
                 res.end(fRes.body);
-                _context.next = 16;
+                _context.next = 17;
                 break;
 
-              case 11:
-                _context.prev = 11;
+              case 12:
+                _context.prev = 12;
                 _context.t0 = _context["catch"](0);
                 console.error("Error handling request", _context.t0);
                 res.statusCode = 500;
                 res.end();
 
-              case 16:
+              case 17:
               case "end":
                 return _context.stop();
             }
           }
-        }, _callee, this, [[0, 11]]);
+        }, _callee, this, [[0, 12]]);
       })));
     }
   }, {

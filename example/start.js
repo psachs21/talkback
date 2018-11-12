@@ -1,6 +1,6 @@
 var talkback = require("../dist/index")
 
-var host = "https://api.github.com"
+var host = "http://localhost:4000"
 
 function bodyMatcher(tape, req) {
   if (tape.meta.tag === "fake-post") {
@@ -36,7 +36,7 @@ function responseDecorator(tape, req) {
 var server = talkback({
   host: host,
   path: __dirname + "/tapes",
-  record: false,
+  record: true,
   debug: false,
   ignoreQueryParams: ["t"],
   bodyMatcher: bodyMatcher,

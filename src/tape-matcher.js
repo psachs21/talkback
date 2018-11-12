@@ -8,6 +8,12 @@ export default class TapeMatcher {
     const otherReq = otherTape.req
     const req = this.tape.req
     const sameURL = req.url === otherReq.url
+    const sameRecordGroup = this.tape.recordGroup === otherTape.recordGroup
+
+    if (!sameRecordGroup) {
+      this.options.logger.debug(`Not same group ${this.tape.recordGroup} vs ${otherTape.recordGroup}`)
+      return false
+    }
     if (!sameURL) {
       if (!this.options.urlMatcher) {
         this.options.logger.debug(`Not same URL ${req.url} vs ${otherReq.url}`)
